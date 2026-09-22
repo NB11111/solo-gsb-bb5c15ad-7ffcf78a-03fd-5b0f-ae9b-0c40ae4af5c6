@@ -18,6 +18,8 @@
   };
   const DIR_ORDER = ['U', 'D', 'L', 'R', 'S'];
   const STORAGE_KEY = 'stage-blocking:v1';
+  const REPORTS_KEY = 'stage-blocking-reports:v1'; // 报告快照独立存档，保持 v1 走位数据结构不变
+  const MAX_REPORTS = 30;
 
   const PALETTE = [
     '#5b8def', '#e5484d', '#3ecf8e', '#f5a623', '#a78bfa',
@@ -166,12 +168,148 @@
     return { positions, blocked, collisions, swaps };
   }
 
+  /* ---------------- 排练场记报告（纯函数，供测试调用） ----------------
+   * buildReport：基于给定 state 与一次 simulate 的结果，生成完全脱离现场
+   * 数据的「只读快照」——所有字段都是拷贝/字符串，此后再编辑走位不会影响
+   * 已生成的报告；fingerprintState 用来识别快照生成后走位是否发生过变化。
+   * ---------------------------------------------------------------- */
+  const REPORT_VERSION = 1;
+
+  function hashString(str) {
+    let h = 5381;
+    for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) >>> 0;
+    return h.toString(36);
+  }
+
+  function fingerprintState(state) {
+    const parts = ['fp1', state.beats];
+    for (const a of state.actors) {
+      parts.push('A', a.id, a.name, a.start ? a.start.c + ',' + a.start.r : '-');
+      for (let b = 1; b <= state.beats; b++) parts.push(moveAt(a, b));
+    }
+    return hashString(parts.join('|'));
+  }
+
+  function buildReport(state, simResult, options) {
+    const opts = options || {};
+    const totalBeats = Math.max(0, Math.trunc(Number(state.beats)) || 0);
+    let from = Math.trunc(Number(opts.fromBeat));
+    let to = Math.trunc(Number(opts.toBeat));
+    if (!Number.isFinite(from)) from = 0;
+    if (!Number.isFinite(to)) to = totalBeats;
+    from = Math.min(Math.max(from, 0), totalBeats);
+    to = Math.min(Math.max(to, 0), totalBeats);
+    if (to < from) { const t = from; from = to; to = t; } // 容错：范围反转则自动交换
+
+    // 默认选择全部演员；传入 actorIds 时只保留仍存在的演员（按当前顺序）
+    const wanted = Array.isArray(opts.actorIds) && opts.actorIds.length
+      ? new Set(opts.actorIds.map(String)) : null;
+    const chosen = state.actors.filter((a) => !wanted || wanted.has(a.id));
+    const idSet = new Set(chosen.map((a) => a.id));
+    const nameOf = new Map(chosen.map((a) => [a.id, a.name]));
+
+    // 冲突汇总：仅收录拍次范围内、且当事演员全部在入选名单中的条目，
+    // 保证报告内部口径一致（逐拍标记与汇总对得上）。
+    const inRange = (b) => b >= from && b <= to;
+    const conflicts = [];
+    simResult.collisions.forEach((c) => {
+      if (!inRange(c.beat) || !c.ids.every((id) => idSet.has(id))) return;
+      conflicts.push({
+        kind: 'collision', beat: c.beat,
+        actorIds: c.ids.slice(), cellKeys: [c.key],
+        text: c.ids.map((id) => nameOf.get(id) || '?').join('、') + ' 同在 (' + c.key + ')'
+      });
+    });
+    simResult.swaps.forEach((s) => {
+      if (!inRange(s.beat) || !idSet.has(s.a) || !idSet.has(s.b)) return;
+      conflicts.push({
+        kind: 'swap', beat: s.beat,
+        actorIds: [s.a, s.b], cellKeys: [s.keyA, s.keyB],
+        text: (nameOf.get(s.a) || '?') + ' ⇄ ' + (nameOf.get(s.b) || '?') + ' 互换格子'
+      });
+    });
+    simResult.blocked.forEach((b) => {
+      if (!inRange(b.beat) || !idSet.has(b.actorId)) return;
+      conflicts.push({
+        kind: 'blocked', beat: b.beat,
+        actorIds: [b.actorId], cellKeys: [b.from],
+        text: (nameOf.get(b.actorId) || '?') + ' 向「' + DIRS[b.dir].label + '」移动越界'
+      });
+    });
+    const rank = { collision: 0, swap: 1, blocked: 2 };
+    conflicts.sort((x, y) => (x.beat - y.beat) || rank[x.kind] - rank[y.kind]);
+
+    // 逐拍场记：每人的本拍动作与拍末坐标（第 0 拍只有起点坐标）
+    const beatRows = [];
+    for (let beat = from; beat <= to; beat++) {
+      const posAt = simResult.positions[beat] || {};
+      const rows = chosen.map((a) => {
+        const pos = Object.prototype.hasOwnProperty.call(posAt, a.id) ? posAt[a.id] : null;
+        let move = null;
+        if (beat >= 1) {
+          const dir = moveAt(a, beat);
+          const blocked = simResult.blocked.some((x) => x.beat === beat && x.actorId === a.id);
+          move = { dir, label: DIRS[dir].label, glyph: DIRS[dir].glyph, blocked };
+        }
+        const coll = pos
+          ? simResult.collisions.find((c) => c.beat === beat && c.key === pos &&
+              c.ids.every((id) => idSet.has(id))) || null
+          : null;
+        const swap = simResult.swaps.find((s) => s.beat === beat &&
+          idSet.has(s.a) && idSet.has(s.b) && (s.a === a.id || s.b === a.id)) || null;
+        return { actorId: a.id, name: a.name, pos, move, collision: !!coll, swap: !!swap };
+      });
+      beatRows.push({ beat, rows });
+    }
+
+    const now = opts.now instanceof Date ? opts.now : new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const createdText = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate()) +
+      ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes());
+    const rangeText = (from === 0 ? '起点' : '第 ' + from + ' 拍') + ' – ' +
+      (to === 0 ? '起点' : '第 ' + to + ' 拍');
+
+    return {
+      app: 'stage-blocking-tool', type: 'rehearsal-report', version: REPORT_VERSION,
+      id: uid('rpt'),
+      createdAt: now.toISOString(),
+      createdText,
+      title: '排练场记报告 · ' + createdText,
+      grid: { cols: COLS, rows: ROWS },
+      totalBeats,
+      range: { fromBeat: from, toBeat: to },
+      rangeText,
+      actors: chosen.map((a) => ({ id: a.id, name: a.name })),
+      beatRows,
+      conflicts,
+      summary: {
+        collision: conflicts.filter((c) => c.kind === 'collision').length,
+        swap: conflicts.filter((c) => c.kind === 'swap').length,
+        blocked: conflicts.filter((c) => c.kind === 'blocked').length,
+        total: conflicts.length
+      },
+      fingerprint: fingerprintState(state)
+    };
+  }
+
+  // 从 localStorage 读回报告时做最小形状校验，损坏条目直接丢弃
+  function normalizeReport(raw) {
+    if (!raw || typeof raw !== 'object' || raw.type !== 'rehearsal-report') return null;
+    if (typeof raw.createdAt !== 'string' || !raw.range ||
+        !Array.isArray(raw.beatRows) || !Array.isArray(raw.conflicts) ||
+        !Array.isArray(raw.actors) || !raw.summary) return null;
+    return raw;
+  }
+
   /* ============================================================
    * 以下为浏览器 UI 层
    * ============================================================ */
   if (typeof document === 'undefined') {
     if (typeof module !== 'undefined' && module.exports) {
-      module.exports = { simulate, normalizeState, DIRS, DIR_ORDER, COLS, ROWS, cellKey };
+      module.exports = {
+        simulate, normalizeState, buildReport, fingerprintState, normalizeReport,
+        DIRS, DIR_ORDER, COLS, ROWS, cellKey
+      };
     }
     return;
   }
@@ -185,6 +323,9 @@
   let playing = false;
   let playTimer = null;
   let toastTimer = null;
+  let reports = [];             // 已生成的排练场记报告快照（只读）
+  let selectedReportActorIds = null; // 生成表单勾选的演员 id；null 表示默认全选
+  let openReportId = null;      // 正在查看的报告 id（报告弹层）
 
   const $ = (id) => document.getElementById(id);
   const actorById = (id) => state.actors.find((a) => a.id === id);
@@ -216,6 +357,28 @@
   }
 
   function resim() { sim = simulate(state.actors, state.beats); }
+
+  /* ---------------- 报告快照的本地存储 ---------------- */
+  function loadReports() {
+    reports = [];
+    try {
+      const raw = localStorage.getItem(REPORTS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          reports = parsed.map(normalizeReport).filter(Boolean);
+        }
+      }
+    } catch (err) { /* 损坏数据：忽略 */ }
+  }
+
+  function saveReports() {
+    try {
+      localStorage.setItem(REPORTS_KEY, JSON.stringify(reports.slice(0, MAX_REPORTS)));
+    } catch (err) { /* 容量不足等场景静默失败 */ }
+  }
+
+  function reportById(id) { return reports.find((r) => r.id === id) || null; }
 
   function commit(gotoBeat) {
     resim();
@@ -561,6 +724,8 @@
     renderConflicts();
     renderTable();
     renderToolbar();
+    renderReportPanel();
+    if (openReportId) renderReportModal();
   }
 
   /* ---------------- 动作编辑（越界拦截） ---------------- */
@@ -738,9 +903,12 @@
         state = normalizeState(parsed.state || parsed);
         currentBeat = 0;
         focusKey = null;
+        settingActorId = null;
+        selectedReportActorIds = null;
         stopPlay();
+        closeReport();
         commit();
-        toast('导入成功：' + state.actors.length + ' 位演员，' + state.beats + ' 拍', 'ok');
+        toast('导入成功：' + state.actors.length + ' 位演员，' + state.beats + ' 拍（报告快照保留）', 'ok');
       } catch (err) {
         toast('导入失败：文件格式不正确', 'error');
       }
@@ -749,14 +917,320 @@
   }
 
   function resetAll() {
-    if (!confirm('确定清空全部演员与走位表吗？此操作只影响本浏览器的本地存档。')) return;
+    if (!confirm('确定清空全部演员与走位表吗？此操作只影响本浏览器的本地走位存档（报告快照保留）。')) return;
     state = freshState();
     currentBeat = 0;
     focusKey = null;
     settingActorId = null;
+    selectedReportActorIds = null;
     stopPlay();
+    closeReport();
     commit();
-    toast('已清空，可重新开始排练', 'ok');
+    toast('已清空，可重新开始排练（报告快照仍在右侧列表中）', 'ok');
+  }
+
+  /* ---------------- 排练场记报告：生成表单 ---------------- */
+  function fillBeatSelect(sel, selected) {
+    let html = '';
+    for (let b = 0; b <= state.beats; b++) {
+      html += '<option value="' + b + '"' + (b === selected ? ' selected' : '') + '>' +
+        (b === 0 ? '起点（第 0 拍）' : '第 ' + b + ' 拍') + '</option>';
+    }
+    sel.innerHTML = html;
+  }
+
+  function chosenReportActorIds() {
+    if (!selectedReportActorIds) return state.actors.map((a) => a.id);
+    return state.actors.map((a) => a.id).filter((id) => selectedReportActorIds.has(id));
+  }
+
+  function renderReportPanel() {
+    const fromSel = $('reportFrom');
+    const toSel = $('reportTo');
+    if (!fromSel) return;
+    const prevFrom = Number(fromSel.value);
+    const prevTo = Number(toSel.value);
+    const have = fromSel.options.length === state.beats + 1;
+    fillBeatSelect(fromSel, have ? Math.min(prevFrom || 0, state.beats) : 0);
+    fillBeatSelect(toSel, have ? Math.min(prevTo || state.beats, state.beats) : state.beats);
+
+    const chips = $('reportActorChips');
+    if (!state.actors.length) {
+      chips.innerHTML = '<span class="empty-hint">还没有演员，请先在上方添加。</span>';
+    } else {
+      const chosen = new Set(chosenReportActorIds());
+      chips.innerHTML = '';
+      state.actors.forEach((actor) => {
+        const on = chosen.has(actor.id);
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'ra-chip' + (on ? ' on' : '');
+        chip.style.borderColor = on ? actorColor(actor) : '';
+        chip.dataset.aid = actor.id;
+        chip.innerHTML = '<i class="ra-dot" style="background:' + actorColor(actor) + '"></i>' +
+          '<span class="ra-check">' + (on ? '☑' : '☐') + '</span>' +
+          escapeHtml(actor.name);
+        chip.title = on ? '点击从报告中排除' : '点击纳入报告';
+        chips.appendChild(chip);
+      });
+    }
+    $('genReportBtn').disabled = !state.actors.length;
+
+    const list = $('savedReportList');
+    if (!reports.length) {
+      list.innerHTML = '<div class="empty-hint">尚无报告快照。选择拍次与演员后点击「生成报告快照」。</div>';
+      return;
+    }
+    const fp = fingerprintState(state);
+    list.innerHTML = '';
+    reports.slice().sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)).forEach((r) => {
+      const stale = r.fingerprint !== fp;
+      const div = document.createElement('div');
+      div.className = 'saved-report' + (openReportId === r.id ? ' open' : '');
+      div.innerHTML =
+        '<button type="button" class="sr-main" data-act="open" data-rid="' + r.id + '">' +
+        '<span class="sr-title"></span>' +
+        '<span class="sr-meta">' + escapeHtml(r.rangeText) + ' · ' + r.actors.length + ' 人 · ' +
+        (r.summary.total ? r.summary.total + ' 条冲突' : '无冲突') + '</span>' +
+        '<span class="sr-state ' + (stale ? 'stale' : 'fresh') + '">' +
+        (stale ? '走位已变更' : '与当前一致') + '</span></button>' +
+        '<button type="button" class="row-btn sr-dl" data-act="download" data-rid="' + r.id +
+        '" title="下载 JSON" aria-label="下载 JSON">⬇</button>' +
+        '<button type="button" class="row-btn sr-del" data-act="delete" data-rid="' + r.id +
+        '" title="删除快照" aria-label="删除快照">✕</button>';
+      div.querySelector('.sr-title').textContent = r.title;
+      list.appendChild(div);
+    });
+  }
+
+  function toggleReportActor(id) {
+    const set = new Set(chosenReportActorIds());
+    if (set.has(id)) set.delete(id); else set.add(id);
+    // 全选时仍以 null 表示，与「默认全选」口径一致
+    selectedReportActorIds = set.size === state.actors.length ? null : set;
+    renderReportPanel();
+  }
+
+  function setReportActors(all) {
+    selectedReportActorIds = all ? null : new Set();
+    renderReportPanel();
+  }
+
+  function generateReport() {
+    if (!state.actors.length) { toast('请先添加演员', 'error'); return; }
+    const ids = chosenReportActorIds();
+    if (!ids.length) { toast('请至少选择一位演员', 'error'); return; }
+    const fromBeat = Number($('reportFrom').value);
+    const toBeat = Number($('reportTo').value);
+    const report = buildReport(state, sim, { actorIds: ids, fromBeat, toBeat });
+    reports.unshift(report);
+    if (reports.length > MAX_REPORTS) reports.length = MAX_REPORTS;
+    saveReports();
+    openReportId = report.id;
+    renderReportPanel();
+    renderReportModal();
+    toast('报告快照已生成（只读，之后修改走位不会影响它）', 'ok');
+  }
+
+  /* ---------------- 排练场记报告：查看弹层 ---------------- */
+  function openReport(id) {
+    const r = reportById(id);
+    if (!r) return;
+    openReportId = id;
+    renderReportModal();
+    renderReportPanel();
+  }
+
+  function closeReport() {
+    openReportId = null;
+    $('reportModal').classList.add('hidden');
+  }
+
+  const CONFLICT_ICON = { collision: '🔴', swap: '🔁', blocked: '⛔' };
+  const CONFLICT_LABEL = { collision: '同格', swap: '互换', blocked: '越界' };
+
+  function renderReportModal() {
+    const r = reportById(openReportId);
+    const modal = $('reportModal');
+    if (!r) { modal.classList.add('hidden'); return; }
+    const body = $('reportBody');
+    const scrollTop = body.scrollTop;
+    const stale = r.fingerprint !== fingerprintState(state);
+
+    let html =
+      '<section class="rpt-head">' +
+      '<h2 class="rpt-title"></h2>' +
+      '<p class="rpt-subline">快照时间 ' + escapeHtml(r.createdText) + ' · 舞台 ' +
+      r.grid.cols + ' × ' + r.grid.rows + ' · 共 ' + r.totalBeats + ' 拍 · 报告范围 ' +
+      escapeHtml(r.rangeText) + '</p>' +
+      '<p class="rpt-actors"><strong>入选演员：</strong>' +
+      r.actors.map((a) => escapeHtml(a.name)).join('、') + '</p>' +
+      '</section>';
+
+    html += '<div class="rpt-banner ' + (stale ? 'stale' : 'fresh') + '" id="rptBanner">' +
+      (stale
+        ? '⚠ 此快照生成后排练走位已被编辑，以下内容仍是生成时的只读快照，不会随之改变。需要最新结果请点上方「按当前走位重新生成」。'
+        : '🔒 只读快照：之后编辑走位不会改变本报告内容。') +
+      '</div>';
+
+    html +=
+      '<section class="rpt-card"><h3>冲突汇总</h3>' +
+      '<div class="rpt-stats">' +
+      '<span class="rpt-stat stat-collision">🔴 同格 <b>' + r.summary.collision + '</b></span>' +
+      '<span class="rpt-stat stat-swap">🔁 互换 <b>' + r.summary.swap + '</b></span>' +
+      '<span class="rpt-stat stat-blocked">⛔ 越界 <b>' + r.summary.blocked + '</b></span>' +
+      '<span class="rpt-stat stat-total">合计 <b>' + r.summary.total + '</b></span>' +
+      '</div>';
+    if (r.conflicts.length) {
+      html += '<ol class="rpt-conflicts">' + r.conflicts.map((cf, i) =>
+        '<li class="rpt-conflict ' + cf.kind + '">' +
+        '<span class="rc-icon">' + CONFLICT_ICON[cf.kind] + '</span>' +
+        '<span class="rc-kind">' + CONFLICT_LABEL[cf.kind] + '</span>' +
+        '<span class="rc-beat">' + beatName(cf.beat) + '</span>' +
+        '<span class="rc-text"></span>' +
+        '<span class="rc-cells">(' + cf.cellKeys.join(')、(') + ')</span>' +
+        '<button type="button" class="btn btn-sm no-print-inline rc-jump" data-act="jump" data-idx="' +
+        i + '">跳回 ' + (cf.beat === 0 ? '起点' : '第 ' + cf.beat + ' 拍') + '</button>' +
+        '</li>').join('') + '</ol>';
+    } else {
+      html += '<p class="empty-hint">所选范围内没有冲突 🎉</p>';
+    }
+    html += '</section>';
+
+    html += '<section class="rpt-card"><h3>逐拍场记</h3><div class="rpt-table-scroll"><table class="rpt-table">' +
+      '<thead><tr><th>拍次</th><th>演员</th><th>动作</th><th>拍末坐标</th></tr></thead><tbody>';
+    r.beatRows.forEach((row) => {
+      row.rows.forEach((entry, i) => {
+        const flags = [];
+        if (entry.move && entry.move.blocked) flags.push('flag-blocked');
+        if (entry.collision) flags.push('flag-collision');
+        if (entry.swap) flags.push('flag-swap');
+        html += '<tr class="' + flags.join(' ') + '">' +
+          (i === 0 ? '<td class="rb-beat" rowspan="' + row.rows.length + '">' +
+            beatName(row.beat) + '</td>' : '') +
+          '<td class="rb-actor"></td>' +
+          '<td class="rb-move">' + (entry.move
+            ? (entry.move.glyph + ' ' + entry.move.label +
+              (entry.move.blocked ? ' <b class="rb-ban">⛔ 越界·原地</b>' : ''))
+            : '<span class="rpt-dim">—</span>') + '</td>' +
+          '<td class="rb-pos">' + (entry.pos
+            ? '(' + entry.pos + ')' +
+              (entry.collision ? ' <b class="rb-tag tag-collision">🔴 同格</b>' : '') +
+              (entry.swap ? ' <b class="rb-tag tag-swap">🔁 互换</b>' : '')
+            : '<span class="rpt-dim">未设起点</span>') + '</td>' +
+          '</tr>';
+      });
+    });
+    html += '</tbody></table></div></section>';
+    html += '<p class="rpt-foot">本报告为生成时刻的只读快照 · 数据保存在本浏览器本地 · 可使用浏览器「打印 / 另存为 PDF」或「下载 JSON」留存</p>';
+
+    body.innerHTML = html;
+    body.querySelector('.rpt-title').textContent = r.title;
+    body.querySelectorAll('.rc-text').forEach((el, i) => { el.textContent = r.conflicts[i].text; });
+    const flatActors = r.beatRows.flatMap((row) => row.rows);
+    body.querySelectorAll('.rb-actor').forEach((el, i) => { el.textContent = flatActors[i].name; });
+    body.scrollTop = scrollTop;
+    modal.classList.remove('hidden');
+  }
+
+  // 在当前走位中找到与报告冲突对应的现场冲突；演员/走位可能已变化，找不到则返回 null
+  function findLiveConflict(cf) {
+    return allConflicts().find((live) => {
+      if (live.kind !== cf.kind || live.beat !== cf.beat) return false;
+      const sameActors = cf.actorIds.every((id) => live.actorIds.includes(id)) &&
+        live.actorIds.length === cf.actorIds.length;
+      if (!sameActors) return false;
+      if (cf.kind === 'collision') return live.cellKeys[0] === cf.cellKeys[0];
+      if (cf.kind === 'blocked') return live.cellKeys[0] === cf.cellKeys[0];
+      return cf.cellKeys.every((k) => live.cellKeys.includes(k));
+    }) || null;
+  }
+
+  function jumpToReportConflict(idx) {
+    const r = reportById(openReportId);
+    if (!r) return;
+    const cf = r.conflicts[idx];
+    if (!cf) return;
+    if (cf.beat > state.beats) {
+      toast('当前走位已不足 ' + cf.beat + ' 拍，无法跳回该拍', 'error');
+      return;
+    }
+    closeReport();
+    const live = findLiveConflict(cf);
+    if (live) {
+      focusConflict(live.key);
+    } else {
+      settingActorId = null;
+      stopPlay();
+      focusKey = null;
+      gotoBeat(cf.beat);
+      toast('该冲突对应的走位已变化，已跳到' + beatName(cf.beat), 'error');
+    }
+  }
+
+  function regenerateReport() {
+    const old = reportById(openReportId);
+    if (!old) return;
+    const ids = old.actors.map((a) => a.id).filter((id) => actorById(id));
+    if (!ids.length) { toast('原报告中的演员均已被删除，无法重新生成', 'error'); return; }
+    if (!confirm('按当前走位重新生成报告？旧快照保留不变，将另存为一份新的只读快照。')) return;
+    const report = buildReport(state, sim, {
+      actorIds: ids,
+      fromBeat: old.range.fromBeat,
+      toBeat: Math.min(old.range.toBeat, state.beats)
+    });
+    reports.unshift(report);
+    if (reports.length > MAX_REPORTS) reports.length = MAX_REPORTS;
+    saveReports();
+    openReportId = report.id;
+    renderReportPanel();
+    renderReportModal();
+    toast('已按当前走位生成新快照', 'ok');
+  }
+
+  function downloadReport(id) {
+    const r = reportById(id ?? openReportId);
+    if (!r) return;
+    const blob = new Blob([JSON.stringify(r, null, 2)], { type: 'application/json' });
+    const d = new Date(r.createdAt);
+    const p = (n) => String(n).padStart(2, '0');
+    const stamp = d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'rehearsal-report-' + stamp + '.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  function deleteReport(id) {
+    const r = reportById(id);
+    if (!r) return;
+    if (!confirm('确定删除报告快照「' + r.title + '」吗？不影响走位数据。')) return;
+    reports = reports.filter((x) => x.id !== id);
+    if (openReportId === id) closeReport();
+    saveReports();
+    renderReportPanel();
+    toast('报告快照已删除');
+  }
+
+  /* ---------------- 报告区域事件委托 ---------------- */
+  function onReportActorChipsClick(e) {
+    const chip = e.target.closest('.ra-chip');
+    if (chip) toggleReportActor(chip.dataset.aid);
+  }
+
+  function onSavedReportsClick(e) {
+    const btn = e.target.closest('button[data-act]');
+    if (!btn) return;
+    const { act, rid } = btn.dataset;
+    if (act === 'open') openReport(rid);
+    else if (act === 'download') downloadReport(rid);
+    else if (act === 'delete') deleteReport(rid);
+  }
+
+  function onReportBodyClick(e) {
+    const btn = e.target.closest('button[data-act="jump"]');
+    if (btn) jumpToReportConflict(Number(btn.dataset.idx));
   }
 
   /* ---------------- 事件绑定 ---------------- */
@@ -783,9 +1257,28 @@
     });
     $('resetBtn').addEventListener('click', resetAll);
 
+    // 排练场记报告
+    $('genReportBtn').addEventListener('click', generateReport);
+    $('reportActorsAll').addEventListener('click', () => setReportActors(true));
+    $('reportActorsNone').addEventListener('click', () => setReportActors(false));
+    $('reportActorChips').addEventListener('click', onReportActorChipsClick);
+    $('savedReportList').addEventListener('click', onSavedReportsClick);
+    $('reportBody').addEventListener('click', onReportBodyClick);
+    $('reportClose').addEventListener('click', closeReport);
+    $('reportRegen').addEventListener('click', regenerateReport);
+    $('reportDownload').addEventListener('click', () => downloadReport(openReportId));
+    $('reportPrint').addEventListener('click', () => window.print());
+    $('reportModal').addEventListener('click', (e) => {
+      if (e.target === $('reportModal')) closeReport();
+    });
+
     document.addEventListener('keydown', (e) => {
       const tag = (e.target.tagName || '').toLowerCase();
       if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
+      if (openReportId) {
+        if (e.key === 'Escape') closeReport();
+        return; // 报告打开时舞台快捷键不生效
+      }
       if (e.key === 'Escape' && settingActorId) {
         settingActorId = null;
         commit();
@@ -800,6 +1293,7 @@
   /* ---------------- 启动 ---------------- */
   function init() {
     load();
+    loadReports();
     resim();
     buildStage();
     bindEvents();
