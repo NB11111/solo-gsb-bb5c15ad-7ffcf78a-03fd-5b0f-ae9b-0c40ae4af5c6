@@ -501,3 +501,321 @@ td.move-cell.flash { animation: cellflash 1s ease; }
   .legend-hint { margin-left: 0; width: 100%; }
   .chip { font-size: 0.6rem; }
 }
+
+/* ============================================================
+   排练场记报告
+   ============================================================ */
+
+/* ---------- 右侧报告列表 ---------- */
+.report-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.report-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 6px 4px 4px;
+}
+.report-open {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.report-open:hover { background: #2c3145; }
+.rr-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rr-meta { font-size: 0.68rem; color: var(--text-dim); }
+.rr-time { font-size: 0.65rem; color: var(--text-dim); white-space: nowrap; }
+
+/* ---------- 通用弹窗（生成报告） ---------- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 10, 16, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 90;
+  padding: 20px;
+}
+.modal {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  width: min(520px, 100%);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+}
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px 8px;
+}
+.modal-header h2 { margin: 0; font-size: 1rem; }
+.modal-body { padding: 6px 18px 12px; overflow-y: auto; }
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 18px 16px;
+}
+.rp-field { display: block; margin-bottom: 14px; }
+.rp-label {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  margin-bottom: 5px;
+}
+.rp-label-row { display: flex; align-items: center; justify-content: space-between; }
+.rp-pick { display: flex; gap: 4px; }
+.rp-input, .rp-select {
+  width: 100%;
+  background: #141722;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 0.88rem;
+}
+.rp-input:focus, .rp-select:focus { outline: none; border-color: var(--accent); }
+.rp-range { display: flex; align-items: center; gap: 10px; }
+.rp-range .rp-select { flex: 1; }
+.rp-range-sep { color: var(--text-dim); font-size: 0.8rem; }
+.rp-actors {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.rp-actor-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 6px 9px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.rp-actor-label:hover { border-color: #454c67; }
+.rp-actor-cb { accent-color: var(--accent); }
+.rp-actor-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rp-note {
+  font-size: 0.74rem;
+  color: var(--text-dim);
+  background: var(--bg-panel-2);
+  border-radius: 8px;
+  padding: 8px 11px;
+  margin: 4px 0 0;
+}
+
+/* ---------- 只读报告查看器 ---------- */
+.viewer-overlay {
+  position: fixed;
+  inset: 0;
+  background: #0c0e15;
+  z-index: 80;
+  overflow-y: auto;
+}
+.viewer-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 18px;
+  background: rgba(20, 23, 34, 0.96);
+  border-bottom: 1px solid var(--border);
+}
+.vt-title { font-size: 0.85rem; font-weight: 700; color: var(--accent); }
+.vt-spacer { flex: 1; }
+
+/* 纸张样式（屏幕上也保持白底黑字，打印结果与屏幕一致） */
+.report-sheet {
+  background: #fff;
+  color: #1a1a1a;
+  max-width: 860px;
+  margin: 22px auto 60px;
+  padding: 40px 48px 56px;
+  border-radius: 6px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  font-size: 0.86rem;
+}
+.sheet-header { border-bottom: 2px solid #222; padding-bottom: 14px; margin-bottom: 18px; }
+.sheet-header h1 { margin: 0 0 6px; font-size: 1.4rem; }
+.sheet-meta { margin: 0 0 6px; color: #444; font-size: 0.78rem; }
+.sheet-frozen-note {
+  margin: 0;
+  font-size: 0.74rem;
+  color: #7a5200;
+  background: #fdf3d8;
+  border: 1px solid #e3c574;
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+.sheet-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 12px;
+  font-size: 0.8rem;
+}
+.ss-item b { font-size: 1rem; }
+.sheet-section-title {
+  font-size: 1.02rem;
+  margin: 26px 0 10px;
+  border-left: 4px solid #444;
+  padding-left: 9px;
+}
+.sheet-sub-hint { font-size: 0.74rem; color: #666; margin: 0 0 10px; }
+
+.sheet-beat { margin-bottom: 18px; break-inside: avoid; }
+.sb-title {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  font-size: 0.9rem;
+  margin: 0 0 5px;
+}
+.sb-beat { font-weight: 700; }
+.sb-note { font-size: 0.72rem; color: #777; font-weight: 400; }
+
+.sheet-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+.sheet-table th, .sheet-table td {
+  border: 1px solid #c9c9c9;
+  padding: 5px 9px;
+  text-align: left;
+}
+.sheet-table th {
+  background: #f0f0f0;
+  font-weight: 600;
+  text-align: center;
+}
+.sheet-table td:nth-child(2),
+.sheet-table td:nth-child(3) { text-align: center; white-space: nowrap; }
+.sheet-table tr.row-conflict { background: #fdecec; }
+.cell-status { font-size: 0.74rem; }
+.rs-ok { color: #2e7d43; }
+.rs-na { color: #999; }
+.rs-mark {
+  display: inline-block;
+  border-radius: 4px;
+  padding: 0 5px;
+  margin: 1px 2px 1px 0;
+  font-size: 0.72rem;
+}
+.rs-collision { background: #f8d7da; color: #842029; }
+.rs-swap { background: #fff3cd; color: #7a5200; }
+.rs-blocked { background: #f8d7da; color: #842029; }
+.mv-intercept { color: #b02a37; font-size: 0.72rem; }
+.mv-blocked { color: #b02a37; }
+
+/* 冲突汇总条目（按钮：跳回拍次） */
+.sheet-conflicts { display: flex; flex-direction: column; gap: 7px; }
+.sheet-conflict {
+  appearance: none;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  border: 1px solid #c9c9c9;
+  border-left-width: 5px;
+  border-radius: 5px;
+  background: #fafafa;
+  color: #1a1a1a;
+  padding: 7px 11px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.sheet-conflict:hover { background: #eef3fb; border-color: #6ea8fe; }
+.sc-collision { border-left-color: #e5484d; }
+.sc-swap { border-left-color: #f5a623; }
+.sc-blocked { border-left-color: #c44; }
+.sc-icon { flex: none; }
+.sc-beat {
+  flex: none;
+  font-weight: 700;
+  background: #ececec;
+  border-radius: 4px;
+  padding: 1px 8px;
+  font-size: 0.72rem;
+  min-width: 52px;
+  text-align: center;
+}
+.sc-text { flex: 1; min-width: 0; }
+.sc-cells { flex: none; color: #666; font-size: 0.72rem; }
+.sc-jump { flex: none; color: #2b62c8; font-size: 0.72rem; }
+.sheet-empty { color: #2e7d43; font-size: 0.82rem; }
+
+/* ---------- 打印样式：只打印报告纸张 ---------- */
+@media print {
+  /* 隐藏除报告覆盖层之外的一切 */
+  body.printing-report .app-header,
+  body.printing-report .layout,
+  body.printing-report .table-panel,
+  body.printing-report #toast,
+  body.printing-report #reportModal { display: none !important; }
+
+  body.printing-report #viewerOverlay,
+  body.printing-report #viewerOverlay.hidden {
+    display: block !important;
+    position: static;
+    overflow: visible;
+    background: #fff;
+  }
+  .no-print { display: none !important; }
+  body.printing-report .viewer-toolbar { display: none !important; }
+  body.printing-report .report-sheet {
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    box-shadow: none;
+    border-radius: 0;
+  }
+  .sheet-beat { break-inside: avoid; }
+  .sheet-conflict { cursor: default; }
+  .sc-jump { color: #555; }
+  @page { margin: 14mm; }
+}
+

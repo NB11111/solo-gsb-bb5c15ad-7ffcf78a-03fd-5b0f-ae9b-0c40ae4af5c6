@@ -11,7 +11,7 @@
 <body>
   <header class="app-header">
     <h1>🎭 剧场排练走位工具</h1>
-    <p class="subtitle">8 × 6 舞台网格 · 逐拍推演 · 碰撞 / 互换冲突检测 · 本地保存</p>
+    <p class="subtitle">8 × 6 舞台网格 · 逐拍推演 · 碰撞 / 互换冲突检测 · 排练场记报告 · 本地保存</p>
   </header>
 
   <main class="layout">
@@ -73,6 +73,14 @@
         </div>
         <div id="conflictList" class="conflict-list"></div>
       </section>
+
+      <section class="panel" aria-label="排练场记报告">
+        <div class="panel-header">
+          <h2>📝 场记报告</h2>
+          <button type="button" id="newReportBtn" class="btn btn-primary btn-sm">＋ 生成报告</button>
+        </div>
+        <ul id="reportList" class="report-list"></ul>
+      </section>
     </aside>
   </main>
 
@@ -100,6 +108,78 @@
       朝舞台外移动的动作会被立即拦截（红框），该演员该拍原地不动。改动自动保存到本浏览器。
     </p>
   </section>
+
+  <!-- 生成排练场记报告 -->
+  <div id="reportModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-label="生成排练场记报告">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>📝 生成排练场记报告</h2>
+        <button type="button" class="row-btn" id="rpCloseX" aria-label="关闭">✕</button>
+      </div>
+      <div class="modal-body">
+        <label class="rp-field">
+          <span class="rp-label">报告名称</span>
+          <input type="text" id="rpTitle" class="rp-input" maxlength="60">
+        </label>
+        <div class="rp-field">
+          <span class="rp-label">拍次范围</span>
+          <div class="rp-range">
+            <select id="rpFrom" class="rp-select" aria-label="起始拍"></select>
+            <span class="rp-range-sep">至</span>
+            <select id="rpTo" class="rp-select" aria-label="结束拍"></select>
+          </div>
+        </div>
+        <div class="rp-field">
+          <div class="rp-label-row">
+            <span class="rp-label">选择演员</span>
+            <span class="rp-pick">
+              <button type="button" class="btn btn-sm" id="rpSelectAll">全选</button>
+              <button type="button" class="btn btn-sm" id="rpSelectNone">清空</button>
+            </span>
+          </div>
+          <ul id="rpActors" class="rp-actors"></ul>
+        </div>
+        <p class="rp-note">
+          报告为<strong>只读快照</strong>：逐拍列出每位演员的坐标与动作，汇总同格 / 互换 / 越界冲突。
+          生成之后再编辑走位，<strong>不会改动已生成的报告</strong>。
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn" id="rpCancel">取消</button>
+        <button type="button" class="btn btn-primary" id="rpSubmit">生成报告</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 查看只读报告 -->
+  <div id="viewerOverlay" class="viewer-overlay hidden" role="dialog" aria-modal="true" aria-label="排练场记报告（只读）">
+    <div class="viewer-toolbar no-print">
+      <span class="vt-title">📝 排练场记报告（只读快照）</span>
+      <span class="vt-spacer"></span>
+      <button type="button" id="viewerPrint" class="btn btn-sm">🖨 打印</button>
+      <button type="button" id="viewerDownload" class="btn btn-sm">⬇ 下载 JSON</button>
+      <button type="button" id="viewerClose" class="btn btn-sm btn-danger">✕ 关闭</button>
+    </div>
+    <article class="report-sheet">
+      <header class="sheet-header">
+        <h1 id="sheetHead"></h1>
+        <p id="sheetMeta" class="sheet-meta"></p>
+        <p id="sheetFrozenNote" class="sheet-frozen-note"></p>
+        <div id="sheetSummary" class="sheet-summary"></div>
+      </header>
+
+      <section>
+        <h2 class="sheet-section-title">逐拍走位记录</h2>
+        <div id="sheetBeats"></div>
+      </section>
+
+      <section>
+        <h2 class="sheet-section-title">冲突汇总</h2>
+        <p class="sheet-sub-hint">点击任意冲突条目可关闭报告并跳回走位编辑器中的对应拍次。</p>
+        <div id="sheetConflicts" class="sheet-conflicts"></div>
+      </section>
+    </article>
+  </div>
 
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
