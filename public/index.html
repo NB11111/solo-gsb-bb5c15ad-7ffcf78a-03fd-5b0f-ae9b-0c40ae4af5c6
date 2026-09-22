@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="剧场排练走位工具：8×6 舞台网格、逐拍走位推演与冲突检测，数据保存在浏览器本地。">
+  <title>剧场排练走位工具</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8E%AD%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1>🎭 剧场排练走位工具</h1>
+    <p class="subtitle">8 × 6 舞台网格 · 逐拍推演 · 碰撞 / 互换冲突检测 · 本地保存</p>
+  </header>
+
+  <main class="layout">
+    <!-- 左：舞台 -->
+    <section class="stage-column" aria-label="舞台区域">
+      <div class="stage-toolbar">
+        <div class="beat-nav">
+          <button type="button" id="prevBeat" class="btn icon-btn" title="上一拍（←）" aria-label="上一拍">◀</button>
+          <div class="beat-indicator">
+            <span id="beatLabel" class="beat-label">起点</span>
+            <span id="beatCounter" class="beat-counter">第 0 / 4 拍</span>
+          </div>
+          <button type="button" id="nextBeat" class="btn icon-btn" title="下一拍（→）" aria-label="下一拍">▶</button>
+          <button type="button" id="playBtn" class="btn" title="自动逐拍播放">⏯ 播放</button>
+        </div>
+        <input type="range" id="beatSlider" min="0" max="4" value="0" step="1" class="beat-slider" aria-label="选择拍">
+        <button type="button" id="editStartBtn" class="btn">✚ 设置起点模式</button>
+      </div>
+
+      <div id="startBanner" class="start-banner hidden">
+        设置起点模式：在舞台上点击一个格子，作为 <strong id="startActorName"></strong> 的起点。
+        再次点击该格取消，或按 Esc 退出。
+      </div>
+
+      <div class="stage-scene">
+        <span class="stage-side side-left">上场门</span>
+        <span class="stage-side side-right">下场门</span>
+        <div id="stage" class="stage" role="grid" aria-label="8 列 6 行舞台网格">
+          <div class="col-labels" aria-hidden="true"></div>
+          <div class="stage-body">
+            <div class="row-labels" aria-hidden="true"></div>
+            <div id="stageGrid" class="stage-grid"></div>
+          </div>
+        </div>
+        <span class="stage-side side-audience">观 众 席</span>
+      </div>
+      <div class="stage-legend">
+        <span><i class="legend-chip chip-swap">⇄</i> 相邻两拍互换</span>
+        <span><i class="legend-dot dot-collision"></i> 同拍同格</span>
+        <span><i class="legend-dot dot-blocked"></i> 越界拦截</span>
+        <span class="legend-hint">舞台行 1 靠近观众席</span>
+      </div>
+    </section>
+
+    <!-- 右：演员与冲突 -->
+    <aside class="side-column">
+      <section class="panel" aria-label="演员列表">
+        <div class="panel-header">
+          <h2>演员</h2>
+          <button type="button" id="addActorBtn" class="btn btn-primary btn-sm">＋ 添加演员</button>
+        </div>
+        <ul id="actorList" class="actor-list"></ul>
+      </section>
+
+      <section class="panel" aria-label="冲突列表">
+        <div class="panel-header">
+          <h2>冲突 <span id="conflictBadge" class="badge hidden">0</span></h2>
+          <button type="button" id="focusNextBtn" class="btn btn-sm">定位下一个</button>
+        </div>
+        <div id="conflictList" class="conflict-list"></div>
+      </section>
+    </aside>
+  </main>
+
+  <!-- 走位表 -->
+  <section class="table-panel" aria-label="走位表">
+    <div class="panel-header table-toolbar">
+      <h2>走位表</h2>
+      <div class="toolbar-group">
+        <button type="button" id="addBeatBtn" class="btn btn-sm">＋ 添加拍</button>
+        <button type="button" id="removeBeatBtn" class="btn btn-sm">－ 删除末拍</button>
+        <button type="button" id="exportBtn" class="btn btn-sm">导出 JSON</button>
+        <button type="button" id="importBtn" class="btn btn-sm">导入 JSON</button>
+        <input type="file" id="importFile" accept="application/json,.json" class="hidden">
+        <button type="button" id="resetBtn" class="btn btn-sm btn-danger">清空全部</button>
+      </div>
+    </div>
+    <div class="table-scroll">
+      <table class="blocking-table">
+        <thead id="tableHead"></thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+    <p class="table-hint">
+      每拍为每位演员选择动作：上 △ / 下 ▽ / 左 ◁ / 右 ▷ / 原地 ·。
+      朝舞台外移动的动作会被立即拦截（红框），该演员该拍原地不动。改动自动保存到本浏览器。
+    </p>
+  </section>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
